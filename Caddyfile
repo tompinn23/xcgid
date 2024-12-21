@@ -1,0 +1,15 @@
+{
+	debug
+	servers {
+		protocols h1 h2
+	}
+}
+
+http://localhost:8080 {
+	reverse_proxy {
+		to 127.0.0.1:8089
+		transport fastcgi {
+			capture_stderr
+		}
+	}
+}

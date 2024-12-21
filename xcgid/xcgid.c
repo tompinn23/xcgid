@@ -24,6 +24,9 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/un.h>
+#include <arpa/inet.h>
 
 static void usage() {
     printf("usage: xcgid [options] [prog] [arg0...]\n");
@@ -43,6 +46,116 @@ static int get_nproc() {
     CPU_ZERO(&cs);
     sched_getaffinity(0, sizeof(cs), &cs);
     return CPU_COUNT(&cs);
+}
+
+/* parse a string containing either a unix socket path e.g /tmp/xcgid.sock 
+  or an inet address in the format e.g 127.0.0.1:8080
+  then create a socket ready for listening set to nonblock
+*/
+static int setup_socket(const char *socketpath) {
+  int fd;
+  struct sockaddr_un unaddr;
+  struct sockaddr_in inaddr;
+
+  if(strchr(socketpath, '/')) {
+    // Create Unix socket
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if(fd == -1) {
+        log_errno(LOG_ERROR, "socket");
+        return -1;
+    }
+
+    // Set socket to non-blocking mode
+    int flags = fcntl(fd, F_GETFL, 0);
+    if(flags == -1) {
+      log_errno(LOG_ERROR, "fcntl");
+      close(fd);
+      return -1;
+    }
+    if(fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      log_errno(LOG_ERROR, "fcntl");
+      close(fd);
+      return -1;
+    }
+    // Bind Unix socket
+    if(unlink(socketpath) < 0) {
+      if(errno != ENOENT) {
+        log_errno(LOG_ERROR, "unlink");
+        close(fd);
+        return -1;
+      }
+    }
+    memset(&unaddr, 0, sizeof(unaddr));
+    unaddr.sun_family = AF_UNIX;
+    strncpy(unaddr.sun_path, socketpath, sizeof(unaddr.sun_path) - 1);
+
+    if(bind(fd, (struct sockaddr *)&unaddr, sizeof(unaddr)) == -1) {
+        log_errno(LOG_ERROR, "bind");
+        close(fd);
+        return -1;
+    }
+  } else {
+    int port = 8080;
+    const char *ip = "127.0.0.1";
+
+    char *addr = strdup(socketpath);
+    if(!addr) {
+      log_errno(LOG_ERROR, "strdup");
+      return -1;
+    }
+    char *colon = strrchr(addr, ':');
+    if(colon) {
+      *colon = '\0';
+      port = strtol(colon + 1, NULL, 10);
+    }
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if(fd == -1) {
+      log_errno(LOG_ERROR, "socket");
+      free(addr);
+      return -1;
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    if(flags == -1) {
+      log_errno(LOG_ERROR, "fcntl");
+      close(fd);
+      free(addr);
+      return -1;
+    }
+    if(fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      log_errno(LOG_ERROR, "fcntl");
+      close(fd);
+      free(addr);
+      return -1;
+    }
+
+    memset(&inaddr, 0, sizeof(inaddr));
+    inaddr.sin_family = AF_INET;
+    inaddr.sin_port = htons(port);
+    if(inet_pton(AF_INET, ip, &inaddr.sin_addr) != 1) {
+      log_errno(LOG_ERROR, "inet_pton");
+      close(fd);
+      free(addr);
+      return -1;
+    }
+
+    if(bind(fd, (struct sockaddr *)&inaddr, sizeof(inaddr)) == -1) {
+      log_errno(LOG_ERROR, "bind");
+      close(fd);
+      return -1;
+    }
+    free(addr);   
+  }
+
+  // Listen on the socket
+  if (listen(fd, 4) == -1) {
+      log_errno(LOG_ERROR, "listen");
+      close(fd);
+      return -1;
+  }
+
+  return fd;
 }
 
 static char *default_socketpath = "/tmp/xcgid.sock";
@@ -126,7 +239,13 @@ int main(int argc, char **argv) {
         printf("    %s\n", *subargv);
         subargv++;
     }
-  serve_variable(workers, max_workers, kill_time, -1, argv + options.optind);
+
+  int fd = setup_socket(socketpath ? socketpath : default_socketpath);
+  if(fd < 0) {
+    return -1;
+  }
+    
+  serve_variable(workers, max_workers, kill_time, fd, argv + options.optind);
 }
 
 struct worker {
@@ -210,6 +329,80 @@ static int xread(int fd, void *buf, size_t bufsz) {
   return 1;
 }
 
+static char *xreadline(int fd) {
+  size_t buffer_size = 256;
+  char *buffer = malloc(buffer_size);
+  if (!buffer) {
+      return NULL;
+  }
+
+  size_t buffer_pos = 0;
+  ssize_t bytes_read;
+  char c;
+  struct pollfd pfd;
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+
+again:
+  int rc = poll(&pfd, 1, 1000);
+  if(rc < 0) {
+    if(errno == EINTR) {
+      goto again;
+    }
+    free(buffer);
+    return NULL;
+  } else if(rc == 0) {
+    free(buffer);
+    return NULL;
+  } else if(!(POLLIN & pfd.revents)) {
+    free(buffer);
+    return NULL;
+  }
+
+  bytes_read = read(fd, &c, 1);
+  if(bytes_read < 0) {
+    if(errno == EAGAIN || errno == EWOULDBLOCK) {
+      if(buffer_pos == 0) {
+        free(buffer);
+        return NULL;
+      }
+      goto again;
+    } else if(errno == EINTR) {
+      goto again;
+    } else {
+      free(buffer);
+      return NULL;
+    }
+  } else if(bytes_read == 0) {
+    if(buffer_pos == 0) {
+      free(buffer);
+      return NULL;
+    }
+    buffer[buffer_pos] = '\0';
+    return buffer;
+  }
+
+  buffer[buffer_pos++] = c;
+
+    // Resize the buffer if necessary
+  if (buffer_pos >= buffer_size) {
+      buffer_size *= 2;
+      char *new_buffer = realloc(buffer, buffer_size);
+      if (!new_buffer) {
+          free(buffer);
+          return NULL;
+      }
+      buffer = new_buffer;
+  }
+
+    // Check for newline character
+  if (c == '\n') {
+      buffer[buffer_pos] = '\0';
+      return buffer;
+  }
+  goto again;
+}
+
 static int xwritefd(int fd, int sendfd, void *buffer, size_t len) {
   struct msghdr  msg;
   int            rc;
@@ -291,9 +484,9 @@ int worker_new(struct worker *w, struct worker *ws, size_t nws, char **argv) {
         }
         char *arg0 = xaprintf("XCGID_ARGV0=%s", argv[0]);
         char buf[64];
-        snprintf(buf, sizeof(buf), "XCGI_LISTENSOCKS=%d", socks[1]);
+        snprintf(buf, sizeof(buf), "XCGI_LISTENSOCK=%d", socks[1]);
         char buf1[64];
-        snprintf(buf1, sizeof(buf1), "XCGI_INFOSOCKS=%d", info_pipes[1]);
+        snprintf(buf1, sizeof(buf1), "XCGI_INFOSOCK=%d", info_pipes[1]);
         char *env[] = {
             "PATH=/usr/local/bin:/usr/bin:/bin",
             arg0,
@@ -344,7 +537,7 @@ int serve_variable(int workers, int max_workers, int waittime, int fd, char **wo
   uint64_t cookie;
 
   npfd = 0;
-  maxpfd = max_workers + 1;
+  maxpfd = (max_workers * 2) + 1;
   
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
@@ -428,6 +621,8 @@ pollagain:
   if(rc < 0 && errno != EINTR) {
     log_errno(LOG_ERROR, "poll: failure");
   }
+  log_debug("poll returned %d", rc);
+  log_debug("term: %d, child: %d, hup: %d", term, child, hup);
 
   if(term) {
     log_info("exiting C-c");
@@ -479,6 +674,7 @@ pollagain:
 
 
   if(nws > workers) {
+    log_debug("checking for idle workers");
     t = time(NULL);
     if(ws[nws - 1].fd == -1 &&
        t - ws[nws - 1].last_activity > waittime) {
@@ -515,13 +711,23 @@ pollagain:
   }
 
   for(int i = 1; i < npfd && rc > 0;) {
+    log_debug("looking at worker %d", i);
     if(POLLHUP && pfd[i].revents ||
        POLLERR && pfd[i].revents) {
       log_error("poll: worker disconnect");
       goto out;
-    } else if(!(POLLIN & pfd[i].revents)) {
-      i++;
+    } else if(!(POLLIN & pfd[i].revents) && !(POLLIN & pfd[i + 1].revents)) {
+      i += 2;
       continue;
+    } else if(POLLIN & pfd[i + 1].revents) {
+      log_debug("worker %d has output", i);
+      char *line = xreadline(pfd[i + 1].fd);
+      if(line) {
+        log_debug("worker %d: %s", i, line);
+      } else {
+        log_warn("worker %d: tried to read logging output", i);
+      }
+      i += 2;
     }
 
     if(!xread(pfd[i].fd, &cookie, sizeof(uint64_t))) {
@@ -553,17 +759,21 @@ pollagain:
   }
 
   if(!accepting) {
+    log_debug("not accepting polling");
     goto pollagain;
   }
 
   if(POLLHUP & pfd[0].revents) {
+    log_error("poll: socket disconnect");
     goto out;
   } else if(POLLERR & pfd[0].revents) {
+    log_error("poll: socket error");
     goto out;
   } else if(!(POLLIN &pfd[0].revents)) {
     goto pollagain;
   }
 
+  log_debug("accepting new connection");
   if(npfd == maxpfd) {
     if(nws + 1 > max_workers) {
       accepting = 0;
@@ -615,9 +825,6 @@ pollagain:
       break;
     }
   }
-  
-
-
 out:
   if(!hup) {
     close(fd);

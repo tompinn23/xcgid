@@ -5,7 +5,7 @@
 
 #include "utils.h"
 
-#include <stddef.h>
+
 
 int xcgi_read_fcgi_header(void *buffer, size_t bufsize, struct fcgi_header *header) {
     struct fcgi_header h;
@@ -137,14 +137,14 @@ int xcgi_read_kv(void *buffer, size_t bufsize, struct fcgi_keyvalue *keyvalue) {
     bufptr += valuelen;
 
     *keyvalue = kv;
-    return XCGI_OK;
+    return bufptr;
 }
 
 int xcgi_read_kva(void *buffer, size_t bufsize, struct fcgi_keyvalue *kv) {
     struct fcgi_keyvalue kva;
     int rc = 0;
 
-    if((rc = xcgi_read_kv(buffer, bufsize, &kv)) != XCGI_OK) {
+    if((rc = xcgi_read_kv(buffer, bufsize, &kva)) != XCGI_OK) {
         return rc;
     }
 
@@ -152,6 +152,18 @@ int xcgi_read_kva(void *buffer, size_t bufsize, struct fcgi_keyvalue *kv) {
     kv->valuelen = kva.valuelen;
     kv->key = xstrndup(kva.key, kva.keylen);
     kv->value = xstrndup(kva.value, kva.valuelen);
+}
+
+/*  you MUST pass a buffer of atleast 8 bytes */
+int64_t xcgi_kv_size(const void *buffer) {
+    uint32_t keylen = 0;
+    uint32_t valuelen = 0;
+    size_t bufptr = 0;
+    
+    bufptr += decode_varint(buffer + bufptr, &keylen);
+    bufptr += decode_varint(buffer + bufptr, &valuelen);
+
+    return bufptr + keylen + valuelen;   
 }
 
 /*
@@ -258,3 +270,5 @@ int xcgi_write_kv(void *buffer, size_t bufsize, struct fcgi_keyvalue *kv) {
 
     return XCGI_OK;
 }
+
+

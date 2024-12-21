@@ -1,6 +1,7 @@
 #ifndef FCGI_H
 #define FCGI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define FCGI_VERSION_1 1
@@ -18,19 +19,24 @@
 #define FCGI_UNKNOWN_TYPE       11
 #define FCGI_MAXTYPE (FCGI_UNKNOWN_TYPE)
 
-struct fcgi_header {
+#define FCGI_HEADER_LEN 8
+#define FCGI_BEGIN_REQUEST_LEN 16
+#define FCGI_END_REQUEST_LEN 16
+
+
+typedef struct fcgi_header {
     uint8_t version;
     uint8_t type;
     uint16_t request_id;
     uint16_t content_length;
     uint8_t padding_length;
     uint8_t reserved;
-};
+} fcgi_header;
 
-struct fcgi_record {
+typedef struct fcgi_record {
     struct fcgi_header header;
     uint8_t *content;
-};
+} fcgi_re;
 
 struct fcgi_begin_request {
     struct fcgi_header header;
@@ -53,13 +59,24 @@ struct fcgi_keyvalue {
     char *value;
 };
 
+struct fcgi_stream {
+    struct fcgi_header header;
+    char *content;
+};
+
+int xcgi_read_fcgi_header(void *buffer, size_t bufsize, struct fcgi_header *header);
+int xcgi_read_begin_request(void *buffer, size_t bufsize, struct fcgi_begin_request *record);
+
 /**
  * Decode a fcgi key value pair from a buffer.
  */
 int xcgi_read_kv(void *buffer, size_t bufsize, struct fcgi_keyvalue *keyvalue);
+
 /**
  * Decode a fcgi key value pair from a buffer but allocate new memory so the original buffer can disappear.
  */
 int xcgi_read_kva(void *buffer, size_t bufsize, struct fcgi_keyvalue *keyvalue);
+
+int64_t xcgi_kv_size(const void *buffer);
 
 #endif

@@ -1,6 +1,7 @@
 #include "xcgi/pool.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 
 struct xcgi_mpool_entry {
     struct xcgi_mpool_entry *next;
@@ -45,11 +46,18 @@ void *xcgi_mpool_alloc(xcgi_mpool *mpool) {
     return entry;
 }
 
+size_t xcgi_mpool_objsz(xcgi_mpool *mpool) {
+    return mpool->object;
+}
+
 /**
  * Free an object from the pool.
  * Appending to the beginning of the free list.
  */
 void xcgi_mpool_free(xcgi_mpool *mpool, void *ptr) {
+    if(ptr == NULL) {
+        return;
+    }
     struct xcgi_mpool_entry *entry = (struct xcgi_mpool_entry *)ptr;
     entry->next = mpool->free;
     mpool->free = entry;

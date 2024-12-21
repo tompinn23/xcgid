@@ -15,3 +15,4 @@ xcgi_mpool *xcgi_mpool_create(size_t object, size_t num);
 void xcgi_mpool_destroy(xcgi_mpool *mpool);
 void *xcgi_mpool_alloc(xcgi_mpool *mpool);
 void xcgi_mpool_free(xcgi_mpool *mpool, void *ptr);
+size_t xcgi_mpool_objsz(xcgi_mpool *mpool);

@@ -1,4 +1,7 @@
-#include "xcgi.h"
+#include "xcgi/xcgi.h"
+
+#include "xcgi/fcgi.h"
+#include "utils.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -8,11 +11,12 @@
 
 #include <sys/poll.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 
 
 int xcgi_init(xcgi *x) {
-  char *listensock;
+  char *listensock, *infosock;
   int rc; 
 
   x->mpool = xcgi_mpool_create(65535, 16);
@@ -30,17 +34,29 @@ int xcgi_init(xcgi *x) {
       x->ctrl = STDIN_FILENO;
     }
   }
+  if((infosock = getenv(XCGI_INFOSOCK_ENV)) != NULL) {
+    char *endptr;
+    x->info = strtol(infosock, &endptr, 10);
+    if(endptr == infosock || *endptr != '\0') {
+      x->info = -1;
+    }
+  }
   return 0;
 }
 
+int xcgi_info(xcgi *x, const char *s) {
+  int rc;
 
-/**
- * This function accepts a connection from the manager process.
- * This follows the more standard fcgi protocol where we would use accept on the listen socket.
- */
-static int xcgid_fdaccept(xcgi *x) {
-  
+  if(x->info < 0) {
+    return -1;
+  }
+
+  if((rc = xfullwrite(x->info, s, strlen(s))) < 0) {
+    return -1;
+  }
+  return rc;
 }
+
 
 static int xfullreadfd(int fd, int *recvfd, void *buffer, size_t bufsize) {
   struct msghdr  msg;
@@ -97,12 +113,25 @@ again:
   return -1;
 }
 
+static int xsockprep(int sock) {
+  int flags;
+
+  flags = fcntl(sock, F_GETFL);
+  if(flags < 0) {
+    return XCGI_ERROR;
+  }
+
+  if(fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) {
+    return XCGI_ERROR;
+  }
+  return XCGI_OK;
+}
+
 /**
  * return -1 on failure;
  * return 1 on success;
  */
 int xcgi_accept(xcgi *x) {
-
   struct sockaddr_storage ss;
   socklen_t sslen = sizeof(ss);
   struct pollfd pfd;
@@ -134,12 +163,13 @@ int xcgi_accept(xcgi *x) {
 
     switch(x->mode) {
       case XCGI_MODE_FCGI:
-        x->fd = accept(x->ctrl, &ss, &sslen);
+        x->fd = accept(x->ctrl, (struct sockaddr *)&ss, &sslen);
         if(x->fd < 0) {
           if(errno == EAGAIN || errno == EWOULDBLOCK) {
             continue;
           }
         }
+        break;
       case XCGI_MODE_XCGI:
         if(!xfullreadfd(x->ctrl, &x->fd, &x->cookie, sizeof(x->cookie))) {
           return -1;
@@ -148,12 +178,11 @@ int xcgi_accept(xcgi *x) {
       default:
         return -1;
     }
+    break;
   }
-
+  if(xsockprep(x->fd) != XCGI_OK) {
+    return -1;
+  }
   return 1;
 }
 
-int xcgi_request(xcgi *x, xcgi_request *req) {
-  char *buf = xcgi_mpool_alloc(x->mpool);
-  
-}
