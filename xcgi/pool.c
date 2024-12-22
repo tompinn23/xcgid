@@ -15,7 +15,7 @@ xcgi_mpool *xcgi_mpool_create(size_t object, size_t num) {
     if(!mpool) {
         return NULL;
     }
-    mpool->data = malloc(object * num);
+    mpool->data = malloc((object + sizeof(void*)) * num);
     if(!mpool->data) {
         free(mpool);
         return NULL;
@@ -25,9 +25,12 @@ xcgi_mpool *xcgi_mpool_create(size_t object, size_t num) {
 
     mpool->free = NULL;
     for(size_t n = 0; n < num; n++) {
-        struct xcgi_mpool_entry *entry = (struct xcgi_mpool_entry *)((char *)mpool->data + (object * n));
+        char *entry_ptr = (char *)mpool->data + (object + sizeof(void *)) * n;
+        struct xcgi_mpool_entry *entry = (struct xcgi_mpool_entry *)(entry_ptr + sizeof(void *));
         entry->next = mpool->free;
         mpool->free = entry;
+        void **pool_ptr = (void **)entry_ptr;
+        *pool_ptr = mpool;
     }
     return mpool;
 }
@@ -54,10 +57,11 @@ size_t xcgi_mpool_objsz(xcgi_mpool *mpool) {
  * Free an object from the pool.
  * Appending to the beginning of the free list.
  */
-void xcgi_mpool_free(xcgi_mpool *mpool, void *ptr) {
+void xcgi_mpool_free(void *ptr) {
     if(ptr == NULL) {
         return;
     }
+    xcgi_mpool *mpool = *((xcgi_mpool **)((char *)ptr - sizeof(void *)));
     struct xcgi_mpool_entry *entry = (struct xcgi_mpool_entry *)ptr;
     entry->next = mpool->free;
     mpool->free = entry;

@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
   while((rc = xcgi_accept(&ctx)) != -1) {
     fprintf(fp, "Accepting!\n");
     if((rc = xcgi_request(&ctx, &req)) == -1) {
-      continue;
+      
     }
     printf("Request ID: %d\n", req.id);
     xcgi_req_iter iter;

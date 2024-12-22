@@ -90,10 +90,10 @@ static int decode_varint(void *buffer, uint32_t *value) {
     uint8_t *buf = (uint8_t*)buffer;
     if((*buf >> 7) == 1) {
         *value = decode_be32(buffer);
-        return 1;
+        return 4;
     } else {
         *value = *buf;
-        return 4;
+        return 1;
     }
 }
 
@@ -136,6 +136,9 @@ int xcgi_read_kv(void *buffer, size_t bufsize, struct fcgi_keyvalue *keyvalue) {
     kv.value = (char*)buffer + bufptr;
     bufptr += valuelen;
 
+    kv.keylen = keylen;
+    kv.valuelen = valuelen; 
+
     *keyvalue = kv;
     return bufptr;
 }
@@ -144,7 +147,7 @@ int xcgi_read_kva(void *buffer, size_t bufsize, struct fcgi_keyvalue *kv) {
     struct fcgi_keyvalue kva;
     int rc = 0;
 
-    if((rc = xcgi_read_kv(buffer, bufsize, &kva)) != XCGI_OK) {
+    if((rc = xcgi_read_kv(buffer, bufsize, &kva)) < 0) {
         return rc;
     }
 
@@ -152,6 +155,8 @@ int xcgi_read_kva(void *buffer, size_t bufsize, struct fcgi_keyvalue *kv) {
     kv->valuelen = kva.valuelen;
     kv->key = xstrndup(kva.key, kva.keylen);
     kv->value = xstrndup(kva.value, kva.valuelen);
+
+    return XCGI_OK;
 }
 
 /*  you MUST pass a buffer of atleast 8 bytes */

@@ -3,15 +3,19 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined (__GLIBC__)
-# include <endian.h>
-# if (__BYTE_ORDER == __LITTLE_ENDIAN)
-#  define LITTLE_ENDIAN
-# elif (__BYTE_ORDER == __BIG_ENDIAN)
-#  define BIG_ENDIAN
-#  error Unknown machine endianness detected.
+#include <stdio.h>
+# if defined(__BYTE_ORDER__)
+# if (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#  ifndef LITTLE_ENDIAN
+#    define LITTLE_ENDIAN
+#  endif
+# elif (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#  ifndef BIG_ENDIAN
+#    define BIG_ENDIAN
+#  endif
+//#  error Unknown machine endianness detected.
 # endif
-# define BYTE_ORDER __BYTE_ORDER
+# define BYTE_ORDER __BYTE_ORDER__
 #elif defined(_BIG_ENDIAN) && !defined(_LITTLE_ENDIAN)
 # define BIG_ENDIAN
 # define BYTE_ORDER 4321

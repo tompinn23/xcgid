@@ -9,6 +9,7 @@
 #include "sc_map.h"
 
 int xcgi_request(xcgi *x, xcgi_req *req) {
+  int rc = 0;
   char *buf = xcgi_mpool_alloc(x->mpool);
 
   char req_buf[sizeof(struct fcgi_begin_request)];
@@ -23,74 +24,18 @@ int xcgi_request(xcgi *x, xcgi_req *req) {
 
   req->id = begin_request.header.request_id;
 
-  if(!xcgi_read_params(x, req)) {
-    return -1;
+  if((rc = xcgi_read_params(x, req)) != XCGI_OK) {
+    return rc;
   }
-}
-
-typedef struct filler_ctx {
-    uint8_t type;
-    int fd;
-    char *buff;
-    size_t buff_size;
-} filler_ctx;
-
-
-static int64_t filler(xcgi_strm *s, const void **buffer) {
-    fcgi_header hdr;
-    char hdr_buf[FCGI_HEADER_LEN];
-    int rc;
-
-    filler_ctx *ctx = s->data;
-
-    /** read the header data */
-    if(!xfullread(ctx->fd, 0, hdr_buf, FCGI_HEADER_LEN)) {
-        return -1;
-    }
-
-    /* parse the header into a structure */
-    if(xcgi_read_fcgi_header(hdr_buf, FCGI_HEADER_LEN, &hdr) != XCGI_OK) {
-        return -1;
-    }
-    
-    /* if it's not the type we want error */
-    if(hdr.type != ctx->type) {
-        return -1;
-    }
-
-    /* if theres no data we are eof */
-    if(hdr.content_length == 0) {
-        return 0;
-    }
-
-    /* if this happens something has broken fcgi spec */
-    if(hdr.content_length > ctx->buff_size) {
-        return -1;
-    }
-
-    /* read the content */
-    if(!xfullread(ctx->fd, 0, ctx->buff, hdr.content_length)) {
-        return -1;
-    }
-
-    /* discard padding */
-    if(!xreaddiscard(ctx->fd, hdr.padding_length)) {
-        return -1;
-    }
-
-    *buffer = ctx->buff;  
-    return hdr.content_length;
 }
 
 
 int xcgi_read_params(xcgi *x, xcgi_req *req) {
-    filler_ctx           ctx;
-    xcgi_strm            *s;
-    const void           *data;
+    xcgi_fcgi_strm *s;
+    const char           *data;
     struct fcgi_keyvalue kv;
     int                  exit = 0;
 
-    ctx.buff = NULL;
 
     if(req->params == NULL) {
         req->params = calloc(1, sizeof(sc_map_str));
@@ -104,10 +49,7 @@ int xcgi_read_params(xcgi *x, xcgi_req *req) {
         }
     }   
 
-    ctx.type = FCGI_PARAMS;
-    ctx.buff = xcgi_mpool_alloc(x->mpool);
-    ctx.buff_size = xcgi_mpool_objsz(x->mpool);
-    s = xcgi_strm_new(filler, &ctx);
+    s = xcgi_fcgi_strm_new(x, FCGI_PARAMS);
     if(!s) {
         exit = -1;
         goto out;
@@ -118,14 +60,17 @@ int xcgi_read_params(xcgi *x, xcgi_req *req) {
         kv.key = NULL;
         kv.value = NULL;
         /** give me 8 bytes this is enough to fully read the keyvalue lengths */
-        data = xcgi_strm_next(s, 8, NULL);
+        data = xcgi_strm_next(s->strm, 8, NULL);
+        if(data == NULL && s->strm->eof) {
+            break;
+        }
         if(data == NULL) {        
             exit = -1;
             goto out;
         }
         /* pass those 8 bytes to the size function to calculate the total length of the keyvalue pair*/
         int64_t buffsize = xcgi_kv_size(data);
-        data = xcgi_strm_next(s, buffsize, NULL);
+        data = xcgi_strm_next(s->strm, buffsize, NULL);
         if(data == NULL) {
             exit = -1;
             goto out;
@@ -135,18 +80,19 @@ int xcgi_read_params(xcgi *x, xcgi_req *req) {
             exit = -1;
             goto out;
         }
-        if(xcgi_strm_consume(s, buffsize) != buffsize) {
+        if(xcgi_strm_consume(s->strm, buffsize) != buffsize) {
             exit = -1;
             goto out;
         }
         sc_map_put_str(req->params, kv.key, kv.value);
     }
 
+    xcgi_fcgi_strm_destroy(s);
+    return XCGI_OK;
 out:
     free(kv.key);
     free(kv.value);
-    xcgi_strm_destroy(s);
-    xcgi_mpool_free(x->mpool, ctx.buff);
+    xcgi_fcgi_strm_destroy(s);
     return exit;
 }
 

@@ -4,13 +4,10 @@
 
 #include "xcgi/pool.h"
 #include "xcgi/request.h"
+#include "xcgi/stream.h"
+#include "xcgi/status.h"
 
-#define XCGI_OK (0)
-#define XCGI_ERROR (-1)
-#define XCGI_MORE (-2)
-#define XCGI_ERR_SYS (-3)
-#define XCGI_ERR_PROTO (-4)
-#define XCGI_ERR_MEM (-5)
+
 
 
 #define XCGI_MODE_FCGI 1
